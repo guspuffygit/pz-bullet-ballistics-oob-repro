@@ -1,19 +1,18 @@
 # Out-of-bounds read in `PZBallisticsTarget::updateSkeletonBoneTransforms` (PZBullet64.dll)
 
-> **Correction, 2026-11-20.** A live test on an unmodded 42.22.2 skeleton disproved the trigger described below. At runtime `Translation_Data` reaches native code with parent `0`, not `-1`, and vanilla characters pass 35 bones, so the vanilla walk stays in bounds. The unchecked parent index and the unchecked `numberOfBones` in the native loop are real, and the crash address is unchanged, but the input that triggers the crash is still being identified. Treat the "Root cause" and "Reproduce" sections as unverified until this notice is removed.
-
 ## Summary
 
-- `PZBallisticsTarget::updateSkeletonBoneTransforms` reads `world[-1]` each time it walks a human skeleton. That happens whenever a firearm aim puts a character in the ballistics target list.
-- The bone `Translation_Data` has no parent in the body mesh, so its parent index reaches native code as `-1`. The walk uses that index on the world-transform array without checking it.
-- The read lands 0x80 bytes before a freshly allocated heap buffer. That memory is usually mapped, so the game reads one garbage transform and carries on.
-- When the buffer starts a page and the page before it is unmapped, the read faults and the client closes to desktop at `PZBullet64.dll+0x269fd`.
-- Seen on Project Zomboid 42.22.2, Windows client, `pzbullet=1.0.0.28`, revision `3d39148846`. The crashing client ran the vanilla 35-bone body mesh (no mod replaced `MaleBody.x` or `FemaleBody.x`).
+- `PZBallisticsTarget::updateSkeletonBoneTransforms` walks `numberOfBones` bones over a native bone table that holds 35 entries. Nothing compares the two.
+- `numberOfBones` is the bone count of the target character's body model. A body mesh with extra nodes under `Dummy01` raises it above 35.
+- The walk then reads parent indices from the memory after the bone table and uses them to index the world-transform array. A junk index faults and the client closes to desktop at `PZBullet64.dll+0x269fd`.
+- Two crash logs from one Windows client on 42.22.2 show `numberOfBones` = 45 and a fault at bone 37.
+- An unmodded game passes 35 bones and stays in bounds. The trigger is a modded body mesh, but the missing check is in the native library.
 
-| Library | SHA-256 |
+| | |
 | --- | --- |
-| `PZBullet64.dll` | `76141df900f08ef71c0808bcd6248c929c47b8c5900b86af4875131a780897ef` |
-| `libPZBullet64.so` | `b5d6178a789280c3bc4787ddf24f1bd44e4037d2d097bf6b4e5b4174c9b67354` |
+| Game | Project Zomboid 42.22.2, `pzbullet=1.0.0.28`, revision `3d39148846` |
+| `PZBullet64.dll` SHA-256 | `76141df900f08ef71c0808bcd6248c929c47b8c5900b86af4875131a780897ef` |
+| `libPZBullet64.so` SHA-256 | `b5d6178a789280c3bc4787ddf24f1bd44e4037d2d097bf6b4e5b4174c9b67354` |
 
 ## Where
 
@@ -23,9 +22,7 @@
 | Windows | `PZBullet64.dll` RVA `0x26590`, faulting load at RVA `0x269fd` |
 | Linux | `libPZBullet64.so` `0x172ef0` (unstripped, the source of the symbol name) |
 | JNI entry | `Java_zombie_core_physics_Bullet_updateBallisticsTargetSkeleton` |
-| Java callers | `BallisticsTarget.updateSkeleton()`, from `CombatManager.processBallisticsTargets` (aim) and `processInstantExplosion` |
-
-Crash frame from the field: `# C [PZBullet64.dll+0x269fd]` on `MainThread`, about 0.15 s after the aim key went down.
+| Java callers | `BallisticsTarget.add()` from `CombatManager.processBallisticsTargets` (aim), and `BallisticsTarget.update()` from `IsoGameCharacter.updateInternal` (each tick while the target is live) |
 
 ## Root cause
 
@@ -34,81 +31,91 @@ The walk builds each bone's world transform from its parent's.
 ```cpp
 world[0] = this->transform;
 for (int i = 1; i < numberOfBones; i++)
-    world[i] = world[ pose->skeleton->bones[i].parent ] * local[i];   // parent is never checked
+    world[i] = world[ pose->skeleton->bones[i].parent ] * local[i];
 ```
 
-Bone records are 0x20 bytes with the parent index at offset 0. `world` and `local` hold 0x80-byte `btTransform` records (double precision) and are allocated on each call, `35 * 0x80 = 0x1180` bytes each.
+- Bone records are 0x20 bytes with the parent index at offset 0.
+- `world` and `local` hold 0x80-byte `btTransform` records and are sized from `numberOfBones` on each call.
+- The bone table is built once by `Bullet.initializeRagdollSkeleton(SkeletonBone.count(), boneHierarchy)` and holds 35 records.
+- The loop bound is the caller's `numberOfBones`. The parent index is used unchecked.
 
-The `-1` comes from the normal content path.
+### How Java produces a count above 35
 
-1. `MaleBody.x` and `FemaleBody.x` declare `Translation_Data` as a top-level frame, a sibling of `Dummy01`.
-2. `RagdollBuilder.getSkinningDataSkeletonHierarchy()` stores `boneHierarchy[Translation_Data] = parentBone.index()`. The parent resolves to `SkeletonBone.None`, and `None.index()` returns `-1`.
-3. `Bullet.initializeRagdollSkeleton(SkeletonBone.count(), boneHierarchy)` passes the array to native `Skeleton::initialize`, which stores `-1` unchanged.
-4. `Translation_Data` is bone 34, the last of 35. The loop reaches `i == 34` and loads `world[-1]`, which is `world - 0x80`.
+1. `BallisticsTarget.initialize()` sets `numberOfBones = character.getAnimationPlayer().boneTransforms.length`.
+2. `AnimationPlayer.setModel` sizes `boneTransforms` from the body model's `SkinningData.numBones()`.
+3. The body model is `skinned/malebody` or `skinned/femalebody`, loaded against the shared animations model.
+4. `ImportedSkeleton.processAiScene` starts from the 35 animation bones and appends every node under the root bone that it does not already know.
 
-Other native code treats `-1` as a sentinel. `RagdollBuilder::setupDefaulSkeleton` checks `parent != -1` before it touches the parent transform. This walk does not.
+A body mesh exported with end bones such as `Bip01_HeadNub` or `Bip01_L_Finger0Nub` therefore adds one bone per extra node. Ten such nodes give 45.
 
-### Why it crashes at random, and only on Windows
+## Evidence from the crash logs
 
-The stray read hits whatever sits before the `world` buffer. In a packed heap that is another live allocation, so nothing faults. The read faults only when the allocator puts the buffer at the start of a committed region with an uncommitted page in front. The Windows heap produces that layout now and then, after minutes or hours of play. glibc's layout on Linux does not produce it in practice, so the defect is present there but silent.
+Both `hs_err` logs fault at `PZBullet64.dll+0x269fd` on `MainThread` with the same register pattern.
 
-### Related overrun in the same loop
+| Register | Value | Meaning |
+| --- | --- | --- |
+| `R14`, `R15` | `0x2d` | `numberOfBones` = 45 |
+| `RBX` | `0x1680` | 45 × 0x80, the byte size of `world[]` |
+| `R9` | `0x25` | loop index 37 |
+| `R10` | `0x4a0` | 37 × 0x20, the offset of bone record 37 |
+| `RCX` | `0x43600` in one log, `0x30ba308000` in the other | parent index × 0x80 |
+| `RAX` | heap pointer | base of `world[]` |
 
-The loop bound is the caller's `numberOfBones`, and nothing compares it with the native skeleton's 35-entry bone table. A body mesh with more than 35 bones would read `bones[i]` past the table. Vanilla bodies have 35 bones and only hit the `-1` case.
+- The faulting address equals `RAX + RCX + 0x50` in both logs.
+- The parent index differs between the two logs (2156 and `0x61746100`), so it was read from unrelated memory. The second value is ASCII text.
+- Records 35 and 36 held values that happened to stay mapped, so the fault came at record 37.
+- One log's Java stack enters through `CombatManager.updateReticle` → `processBallisticsTargets` → `BallisticsTarget.add`. The other enters through `IsoZombie.update` → `BallisticsTarget.update`.
 
 ## Reproduce
 
 ### 1. Standalone harness (no game needed)
 
-`repro.cpp` copies the walk and places `world[]` at the start of a page with an inaccessible guard page in front. The `world[-1]` load then faults on every run.
+`repro.cpp` copies the walk's indexing and runs 45 bones over a 35-entry table followed by text bytes.
 
 ```
 make run
 ```
 
-Expected output on Linux (exit 139 is SIGSEGV):
+Output on Linux (exit 139 is SIGSEGV):
 
 ```
-world[] buffer at 0x....000, guard page immediately before it
-walking 35 bones; bone 34 (Translation_Data) has parent -1
-expect a fault reading world[-1] at 0x....f80 (world base - 0x80) ...
-SIGSEGV reading 0x....f80  (inside world[-1], i.e. world base - 0x80)
+bone table holds 35 entries, walking 45 bones
+bone 35 is past the table, parent index read as 1768187245 (0x6964656d)
+SIGSEGV reading 0x............ (world base 0x............)
 exit: 139
 ```
 
-On Windows, build with `cl /EHsc repro.cpp`. The guard page there is a reserved `PAGE_NOACCESS` page and the process dies with an access violation.
+### 2. In game
 
-### 2. The shipped DLL, on demand
-
-Full PageHeap with backward alignment puts a guard page before every heap block, so the same read should fault on the first aim.
-
-1. Install Debugging Tools for Windows (`gflags.exe`).
-2. Run `gflags /p /enable ProjectZomboid64.exe /full /backwards`.
-3. Launch the game with no mods, load a character, and aim a firearm at a zombie.
-4. Expect an access violation at `PZBullet64.dll+0x269fd`, reading just below a heap block.
-5. Turn it off with `gflags /p /disable ProjectZomboid64.exe`.
-
-Default PageHeap guards the end of each block and does not catch this read, so `/backwards` is required.
+1. Install a mod that replaces `media/models_X/Skinned/MaleBody` and `FemaleBody` with meshes that keep extra nodes under `Dummy01`, for example `Nub` end bones.
+2. Load a save, equip a firearm, and aim at a zombie.
+3. The walk reads past the bone table on every call. Whether a given call faults depends on what follows the table in the heap, so a crash can take a few aims or many.
 
 ## Suggested fix
 
-Treat a negative parent as the root inside the walk.
+Bound the walk by the skeleton's own bone count and reject a parent index outside the buffer.
 
 ```cpp
-int parent = bones[i].parent;
-world[i] = (parent < 0 ? world[0] : world[parent]) * local[i];
+int count = std::min(numberOfBones, pose->skeleton->boneCount);
+for (int i = 1; i < count; i++) {
+    int parent = bones[i].parent;
+    if (parent < 0 || parent >= i) parent = 0;
+    world[i] = world[parent] * local[i];
+}
 ```
 
-Alternatively, give every non-root bone a valid parent when the hierarchy is built, either in Java (`RagdollBuilder.getSkinningDataSkeletonHierarchy`) or in native `RagdollBuilder::initializeSkeletonHiearachy`.
-
-Clamping `numberOfBones` to the skeleton's own bone count would close the related overrun.
+The same clamp can be applied in Java, where `BallisticsTarget.initialize()` could use `Math.min(boneTransforms.length, SkeletonBone.count())`.
 
 ## How this was established, and what is untested
 
 - The function and offsets come from disassembling both libraries. The Linux build keeps its symbols, and the Windows function was matched to it by structure.
-- The crash dumps from the field lost their register state, so the `-1` index was not read from a dump. It follows from the faulting instruction (a load at `world + parent * 0x80`), the Java code that produces the hierarchy, and the mesh files.
-- The harness was built and run on Linux, where it faults at the predicted address on every run. Its Windows branch has not been compiled.
-- The PageHeap recipe has not been run against the game yet.
+- The bone count, loop index and junk parent index come from the register dumps in two `hs_err` logs.
+- The path from body mesh to `numberOfBones` comes from reading the decompiled Java.
+- A live unmodded 42.22.2 client was inspected. Every character had 35 bones and no bone other than the root had parent `-1`, so the vanilla walk stays in bounds. Aiming under full PageHeap did not fault.
+- The server the crashing client played on runs one body-replacing mod. That mod ships a legacy mesh with 45 skeleton nodes and current meshes with 35. Which file the crashing client loaded was not confirmed.
+- The in-game steps above have not been run end to end.
+- The harness was built and run on Linux. Its Windows branch has not been compiled.
+- An earlier version of this report blamed a `-1` parent on `Translation_Data` in the vanilla mesh. The live test disproved that.
 
 ## Earlier reports of this crash
 
@@ -116,8 +123,8 @@ These threads describe a crash on aiming a firearm at a zombie. Several quote th
 
 | Thread | Version | Notes |
 | --- | --- | --- |
-| [Crash to Desktop When Aiming at a Zombie — No Mods, New Save](https://theindiestone.com/forums/topic/101607-42204-crash-to-desktop-when-aiming-at-a-zombie-no-mods-new-save/) | 42.20.4 | No mods, new save. Matches the `-1` parent case. |
-| [CTD on PZBullet64.dll with mod what changes player (and zombies) model](https://theindiestone.com/forums/topic/101299-42204-ctd-on-pzbullet64dll-with-mod-what-changes-player-and-zombies-model/) | 42.20.4 | Same `+0x269fd` frame with a model-changing mod. Matches the related overrun. |
+| [Crash to Desktop When Aiming at a Zombie — No Mods, New Save](https://theindiestone.com/forums/topic/101607-42204-crash-to-desktop-when-aiming-at-a-zombie-no-mods-new-save/) | 42.20.4 | Reported as no mods on a new save. A moderator attributed it to leftover mod files. |
+| [CTD on PZBullet64.dll with mod what changes player (and zombies) model](https://theindiestone.com/forums/topic/101299-42204-ctd-on-pzbullet64dll-with-mod-what-changes-player-and-zombies-model/) | 42.20.4 | Same `+0x269fd` frame with a model-changing mod. Matches this report. |
 | [Crashing when aiming firearm - error included](https://steamcommunity.com/app/108600/discussions/1/595136072544947629/) | 42.21 | Steam discussion. |
 | [Aiming guns at zombies causes game crash](https://theindiestone.com/forums/topic/92985-42153-fixed-it-was-my-fault-aiming-guns-at-zombies-causes-game-crash/) | 42.15.3 | Custom player model. |
 | [game crashing when aiming a gun](https://theindiestone.com/forums/index.php?/topic/73381-4200-rev25072-game-crashing-when-aiming-a-gun/) | 42.0.0 | Crashes on aiming at a zombie, never with a melee weapon. |
