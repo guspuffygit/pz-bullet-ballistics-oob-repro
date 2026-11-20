@@ -107,3 +107,15 @@ Clamping `numberOfBones` to the skeleton's own bone count would close the relate
 - The crash dumps from the field lost their register state, so the `-1` index was not read from a dump. It follows from the faulting instruction (a load at `world + parent * 0x80`), the Java code that produces the hierarchy, and the mesh files.
 - The harness was built and run on Linux, where it faults at the predicted address on every run. Its Windows branch has not been compiled.
 - The PageHeap recipe has not been run against the game yet.
+
+## Earlier reports of this crash
+
+These threads describe a crash on aiming a firearm at a zombie. Several quote the same `PZBullet64.dll+0x269fd` frame.
+
+| Thread | Version | Notes |
+| --- | --- | --- |
+| [Crash to Desktop When Aiming at a Zombie — No Mods, New Save](https://theindiestone.com/forums/topic/101607-42204-crash-to-desktop-when-aiming-at-a-zombie-no-mods-new-save/) | 42.20.4 | No mods, new save. Matches the `-1` parent case. |
+| [CTD on PZBullet64.dll with mod what changes player (and zombies) model](https://theindiestone.com/forums/topic/101299-42204-ctd-on-pzbullet64dll-with-mod-what-changes-player-and-zombies-model/) | 42.20.4 | Same `+0x269fd` frame with a model-changing mod. Matches the related overrun. |
+| [Crashing when aiming firearm - error included](https://steamcommunity.com/app/108600/discussions/1/595136072544947629/) | 42.21 | Steam discussion. |
+| [Aiming guns at zombies causes game crash](https://theindiestone.com/forums/topic/92985-42153-fixed-it-was-my-fault-aiming-guns-at-zombies-causes-game-crash/) | 42.15.3 | Custom player model. |
+| [game crashing when aiming a gun](https://theindiestone.com/forums/index.php?/topic/73381-4200-rev25072-game-crashing-when-aiming-a-gun/) | 42.0.0 | Crashes on aiming at a zombie, never with a melee weapon. |
