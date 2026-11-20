@@ -93,13 +93,13 @@ exit: 139
 
 ## Suggested fix
 
-Bound the walk by the skeleton's own bone count and reject a parent index outside the buffer.
+Bound the walk by the skeleton's own bone count and reject a parent index outside the buffer. The field name `boneCount` below is a placeholder.
 
 ```cpp
 int count = std::min(numberOfBones, pose->skeleton->boneCount);
 for (int i = 1; i < count; i++) {
     int parent = bones[i].parent;
-    if (parent < 0 || parent >= i) parent = 0;
+    if (parent < 0 || parent >= count) parent = 0;
     world[i] = world[parent] * local[i];
 }
 ```
