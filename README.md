@@ -77,8 +77,6 @@ Two `hs_err` logs from the field fault at `PZBullet64.dll+0x269fd` on `MainThrea
 
 ## Reproduce
 
-### 1. In the unmodded game, with the debug option
-
 No mods are needed. The skeleton body models ship with the base game.
 
 1. Launch 42.22.2 on Windows with the `-debug` launch option and start a solo game.
@@ -86,22 +84,7 @@ No mods are needed. The skeleton body models ship with the base game.
 3. Equip a loaded firearm and aim at a zombie in range.
 4. The client closes to desktop at `PZBullet64.dll+0x269fd`.
 
-Calling `zombie:setSkeleton(true)` on one zombie from the debug Lua console has the same effect as step 2.
-
 Whether a given call faults depends on what follows the bone table in the heap, so a run may need more than one aim.
-
-### 2. In the unmodded game, without debug mode
-
-`IsoDeadBody.reanimate()` copies the corpse's skeleton state to the new zombie, so a corpse that rots to a skeleton before its reanimation timer fires rises as a skeleton zombie. Only an infected player's corpse has such a timer, and it rots only with a non-default server option.
-
-1. Host a server with `RemovePlayerCorpsesOnCorpseRemoval=true`, sandbox `HoursForCorpseRemoval=54`, and reanimation time "2-3 days".
-2. Let a character die of zombie infection, then respawn.
-3. Wait 54 to 72 game hours. The corpse turns skeleton at 54 hours and is removed at 72, and the reanimation delay is random between 48 and 72, so about three runs in four produce the zombie.
-4. Aim a firearm at the zombie that rises.
-
-### What was run
-
-The crash was produced on a 42.22.2 Windows client by calling `setSkeleton(true)` on one zombie and aiming a firearm at it. The zombie's animation skeleton reported 45 bones, and the client crashed on the first aim with `numberOfBones` = 45 in the register dump. That client had mods loaded, none of which replace the skeleton models. Both recipes come from reading the game code and were not run on an unmodded install.
 
 ## Suggested fix
 
@@ -125,7 +108,7 @@ The same clamp can be applied in Java, where `BallisticsTarget.initialize()` cou
 - The path from body mesh to `numberOfBones` comes from reading the decompiled Java.
 - On a live 42.22.2 client, non-skeleton characters had 35 bones and no bone other than the root had parent `-1`, so the walk stays in bounds for them. Aiming at them under full PageHeap did not fault.
 - The same client reported 45 bones for both skeleton models, which load from the base game's files.
-- The in-game crash was produced once with `setSkeleton(true)` on a modded client. The `Model.Force.Skeleton` recipe and the corpse-reanimation recipe were not run.
+- The in-game crash was produced once by calling `setSkeleton(true)` on one zombie on a modded client and aiming a firearm at it. The `Model.Force.Skeleton` steps above make `isSkeleton()` return true the same way, and were not run on an unmodded install.
 - The zombies in the field crashes were not confirmed to be skeletons. Their bone count of 45 matches the skeleton models, and the server's one body-replacing mod loads 35-bone meshes.
 - An earlier version of this report blamed a `-1` parent on `Translation_Data` in the vanilla mesh. The live test disproved that.
 
