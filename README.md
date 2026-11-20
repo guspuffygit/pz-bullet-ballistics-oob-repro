@@ -1,5 +1,7 @@
 # Out-of-bounds read in `PZBallisticsTarget::updateSkeletonBoneTransforms` (PZBullet64.dll)
 
+> **Correction, 2026-11-20.** A live test on an unmodded 42.22.2 skeleton disproved the trigger described below. At runtime `Translation_Data` reaches native code with parent `0`, not `-1`, and vanilla characters pass 35 bones, so the vanilla walk stays in bounds. The unchecked parent index and the unchecked `numberOfBones` in the native loop are real, and the crash address is unchanged, but the input that triggers the crash is still being identified. Treat the "Root cause" and "Reproduce" sections as unverified until this notice is removed.
+
 ## Summary
 
 - `PZBallisticsTarget::updateSkeletonBoneTransforms` reads `world[-1]` each time it walks a human skeleton. That happens whenever a firearm aim puts a character in the ballistics target list.
