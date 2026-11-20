@@ -77,24 +77,7 @@ Two `hs_err` logs from the field fault at `PZBullet64.dll+0x269fd` on `MainThrea
 
 ## Reproduce
 
-### 1. Standalone harness (no game needed)
-
-`repro.cpp` copies the walk's indexing and runs 45 bones over a 35-entry table followed by text bytes.
-
-```
-make run
-```
-
-Output on Linux (exit 139 is SIGSEGV):
-
-```
-bone table holds 35 entries, walking 45 bones
-bone 35 is past the table, parent index read as 1768187245 (0x6964656d)
-SIGSEGV reading 0x............ (world base 0x............)
-exit: 139
-```
-
-### 2. In the unmodded game, with the debug option
+### 1. In the unmodded game, with the debug option
 
 No mods are needed. The skeleton body models ship with the base game.
 
@@ -107,7 +90,7 @@ Calling `zombie:setSkeleton(true)` on one zombie from the debug Lua console has 
 
 Whether a given call faults depends on what follows the bone table in the heap, so a run may need more than one aim.
 
-### 3. In the unmodded game, without debug mode
+### 2. In the unmodded game, without debug mode
 
 `IsoDeadBody.reanimate()` copies the corpse's skeleton state to the new zombie, so a corpse that rots to a skeleton before its reanimation timer fires rises as a skeleton zombie. Only an infected player's corpse has such a timer, and it rots only with a non-default server option.
 
@@ -118,7 +101,7 @@ Whether a given call faults depends on what follows the bone table in the heap, 
 
 ### What was run
 
-The crash was produced on a 42.22.2 Windows client by calling `setSkeleton(true)` on one zombie and aiming a firearm at it. The zombie's animation skeleton reported 45 bones, and the client crashed on the first aim with `numberOfBones` = 45 in the register dump. That client had mods loaded, none of which replace the skeleton models. Recipes 2 and 3 come from reading the game code and were not run on an unmodded install.
+The crash was produced on a 42.22.2 Windows client by calling `setSkeleton(true)` on one zombie and aiming a firearm at it. The zombie's animation skeleton reported 45 bones, and the client crashed on the first aim with `numberOfBones` = 45 in the register dump. That client had mods loaded, none of which replace the skeleton models. Both recipes come from reading the game code and were not run on an unmodded install.
 
 ## Suggested fix
 
@@ -144,7 +127,6 @@ The same clamp can be applied in Java, where `BallisticsTarget.initialize()` cou
 - The same client reported 45 bones for both skeleton models, which load from the base game's files.
 - The in-game crash was produced once with `setSkeleton(true)` on a modded client. The `Model.Force.Skeleton` recipe and the corpse-reanimation recipe were not run.
 - The zombies in the field crashes were not confirmed to be skeletons. Their bone count of 45 matches the skeleton models, and the server's one body-replacing mod loads 35-bone meshes.
-- The harness was built and run on Linux. Its Windows branch has not been compiled.
 - An earlier version of this report blamed a `-1` parent on `Translation_Data` in the vanilla mesh. The live test disproved that.
 
 ## Earlier reports of this crash
